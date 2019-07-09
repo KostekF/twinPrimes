@@ -15,7 +15,8 @@ vector<pair<int, int>> vTwins;
 
 //Use Sieve of Eratosthenes to look for prime numbers, 
 //then assign those prime numbers to vector v1
-void  generatePrimes(vector<int> & v1,int n)
+//n is maximal number that algorithm will search
+void  generatePrimes(vector<uint32_t> & v1,int n)
 {
 	bool *tab=new bool[n+1];
 
@@ -43,67 +44,119 @@ void  generatePrimes(vector<int> & v1,int n)
 		if (tab[i])
 			v1.push_back(i);
 	}
-	//cout << "Number of twins: " << v1.size() << endl;
+	
+	//cout << "Number of primes: " << v1.size() << endl;
 	delete[] tab;
 
 
 
 }
 
-void lookForTwinPrime(vector<int> &vPrime,double startPercent, int worldSize,int world_rank)
+
+//Find twin primes and return number of twin primes in vPrime vector
+uint32_t mpiLookForTwinPrime(vector<uint32_t>& vPrime)
 {
-	pair<int, int> twinPrime;
-
-
-
-	//MPI version around 10 times faster
-	auto itr = vPrime.begin();
-	auto itrEnd = vPrime.begin();
-	double start = (double)startPercent*vPrime.size();
-	double end=vPrime.size() / worldSize;
-	
-	//assign iterators to specific elements in vector
-	advance(itr, (int)start); //round down(cut)
-	advance(itrEnd, ceil(start));//round up to overlap
-	if (world_rank != worldSize - 1)
+	uint32_t countTwins = 0;
+	for (int i = 0; i < vPrime.size()-1; ++i)
 	{
-		advance(itrEnd, end);
-	}
-	else advance(itrEnd, end-1); // if it's last process
-	
-
-	//std::cout <<(int)start<<","<<ceil(start)+end  << std::endl;
-	
-	for (; itr != itrEnd; ++itr)
-	{
-		if ((*(next(itr)) - *itr) == 2) //check if two primes are twin primes
+		int diff = vPrime[i + 1] - vPrime[i];
+		if ( diff== 2)
 		{
-			twinPrime = make_pair(*itr, *(next(itr)));
-			//cout << *itr << ", " << *(next(itr)) << endl;
-			vTwins.push_back(twinPrime);
-
+		//	cout << vPrime[i] << ", " << vPrime[i + 1] << endl;
+			countTwins++;
 		}
 	}
-	
 
-
-	/* Normal version
-	for (auto itr = vPrime.begin(); itr != prev(vPrime.end()); ++itr)
-	{
-		if ((*(next(itr)) - *itr) == 2)
-		{
-			twinPrime = make_pair(*itr, *(next(itr)));
-			//cout<<*itr<<", "<<  *(next(itr))<<endl;
-			vTwins.push_back(twinPrime);
-		}
-	}
-	*/
+	return countTwins;
 
 }
 
+//Display sent/recived data
+void displayVector(const vector<uint32_t> & split_part,  int rankNum=0, int destNum = 0 )
+{
+	if (!rankNum)
+	{
+		if (destNum != 0)
+		{
+			cout << "Process " << rankNum << " sent those numbers to process " << destNum << "" << endl;
+		}
+		else
+			cout << "Process " << rankNum << " is working on those numbers: " << endl;
+	}	
+	else cout <<"Process " <<rankNum <<" recived those numbers: " << endl;
+	for (auto i : split_part)
+	{
+		cout << i << ", ";
+	}
+}
+
+
+//Split data to be sent and then send it to processes. Each process
+//recives splitted part of data and calculates number of twin primes in given data vector.
+//by using mpiLookForTwinPrime() funciton
+//Function returns number of twin primes in given vector
+uint32_t splitAndSendRecv(int world_size, int world_rank, vector<uint32_t> & primes)
+{
+
+	
+		if (world_rank == 0)
+		{
+			std::size_t const partSize = primes.size() / world_size + 1;
+			auto begin = primes.begin();
+			auto end = primes.begin() + partSize;
+			std::vector<uint32_t> split_part(begin, end);
+
+			//cout << "PartSize = " << partSize << "\n";
+			//cout << "Rank 0" << endl;
+			//displayVector(split_part);
+			//cout << endl;
+
+			for (int destProcess = 1; destProcess < world_size; ++destProcess)
+			{
+				//cout << "Rank " << destProcess << endl;
+				begin = end - 1;
+
+				std::vector<uint32_t> partToSend;
+				if (destProcess == world_size - 1) //if it's last part
+				{
+					std::vector<uint32_t> split_part(begin, primes.end());
+					partToSend = split_part;
+					//displayVector(split_part, world_rank, destProcess);
+				}
+				else
+				{
+					end = begin + partSize;
+					std::vector<uint32_t> split_part(begin, end);
+					partToSend = split_part;
+					//displayVector(split_part, world_rank, destProcess);
+				}
+
+				//Send number of ints
+				uint32_t sizeOfData = partToSend.size();
+				MPI_Send(&sizeOfData, 1, MPI_INT, destProcess, 1, MPI_COMM_WORLD);
+
+				MPI_Send(&partToSend[0], partToSend.size(), MPI_INT, destProcess, 0, MPI_COMM_WORLD);
+				//cout << endl;
+
+			}
+			return mpiLookForTwinPrime(split_part);
+		}
+		else
+		{
+			int sizeOfData;
+			MPI_Recv(&sizeOfData, 1, MPI_INT, 0, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+			//cout << "Process " << world_rank << " recived " << sizeOfData << " INTs" << endl;
+			std::vector<uint32_t> split_part(sizeOfData);
+
+			MPI_Recv(&split_part[0], sizeOfData, MPI_INT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+			//displayVector(split_part, world_rank);
+			return mpiLookForTwinPrime(split_part);
+		}
+	
+}
 int main(int argc, char* argv[])
 {
-	vector<int> primes = {};
+	vector<uint32_t> primes = { };
 	
 	//
 	// Initialize the MPI environment
@@ -117,32 +170,43 @@ int main(int argc, char* argv[])
 	int world_rank;
 	MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
 
-	//int n = 0;
+
 	int n = atoi(argv[1]);
 	
-	
-	//n = 545;
 	generatePrimes(primes,n);
 
-	//auto start = chrono::steady_clock::now();
-	lookForTwinPrime(primes,(double)world_rank/world_size,world_size,world_rank);
-	//auto end = chrono::steady_clock::now();
-	//cout << "Elapsed time in seconds : " << chrono::duration_cast<chrono::milliseconds>(end - start).count() << " milisec";
-	
-	
 
+	auto start = chrono::steady_clock::now();
+	uint32_t globalSum = 0;
+	//Calculate number of all twin primes
+	if (world_size > 1)
+	{
+		uint32_t localSum = splitAndSendRecv(world_size, world_rank, primes);
+		
+		MPI_Reduce(&localSum, &globalSum, 1, MPI_INT, MPI_SUM, 0, MPI_COMM_WORLD);
+
+		if (world_rank == 0)
+		{
+			cout << "Number of twin primes in range <1;" << n << "> = " << globalSum << endl;
+			auto end = chrono::steady_clock::now();
+			cout << "Elapsed time in miliseconds for " << world_size << " processes: " << chrono::duration_cast<chrono::milliseconds>(end - start).count() << " milisec";
+		}
+	}
+	else
+	{
+		globalSum = mpiLookForTwinPrime(primes);
+
+		cout << "Number of twin primes in range <1;" << n << "> = " << globalSum << endl;
+		auto end = chrono::steady_clock::now();
+		cout << "Elapsed time in miliseconds for 1 process: " << chrono::duration_cast<chrono::milliseconds>(end - start).count() << " milisec";
+
+	}
+	
+	//
 	
 
 	MPI_Finalize();
 
-	/*
-	sort(vTwins.begin(), vTwins.end());
-	
-	for (auto itr = vTwins.begin(); itr != vTwins.end(); ++itr)
-	{
-		cout << itr->first << ", " << itr->second << endl;
-	}
-	*/
 
 	return 0;
 }
